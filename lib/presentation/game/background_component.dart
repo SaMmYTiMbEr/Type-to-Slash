@@ -2,17 +2,24 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flame/components.dart';
-import 'package:flutter/animation.dart';
 import 'package:flutter/painting.dart';
 
 import '../../domain/game_rules.dart';
 
-/// Arena backdrop: gradient sky, drifting starfield, scrolling grid lines,
-/// vignette and the defense line.
+/// Arena backdrop: gradient sky, drifting starfield, scrolling grid, vignette
+/// and the defense line. The palette rotates with the wave number.
 class BackgroundComponent extends PositionComponent {
-  BackgroundComponent(this._rules);
+  BackgroundComponent(this._rules) : super(priority: -1);
 
   final GameRules _rules;
+
+  static const List<List<Color>> _palettes = [
+    [Color(0xFF1B1033), Color(0xFF0B0716)],
+    [Color(0xFF0B2A3B), Color(0xFF061017)],
+    [Color(0xFF3B0B24), Color(0xFF140610)],
+    [Color(0xFF12301B), Color(0xFF06140C)],
+    [Color(0xFF33260B), Color(0xFF140F05)],
+  ];
 
   static const int _starCount = 60;
   static const double _gridSpacing = 48;
@@ -22,11 +29,18 @@ class BackgroundComponent extends PositionComponent {
     ..color = const Color(0x22FFFFFF)
     ..strokeWidth = 1;
 
+  int _wave = 1;
   double _time = 0;
   ui.Shader? _skyShader;
   Vector2 _skySize = Vector2.zero();
   ui.Shader? _vignetteShader;
   Vector2 _vignetteSize = Vector2.zero();
+
+  void setWave(int wave) {
+    if (wave == _wave) return;
+    _wave = wave;
+    _skyShader = null;
+  }
 
   @override
   void update(double dt) {
@@ -48,10 +62,11 @@ class BackgroundComponent extends PositionComponent {
 
     if (_skyShader == null || _skySize != size) {
       _skySize = size.clone();
-      _skyShader = ui.Gradient.linear(rect.topCenter, rect.bottomCenter, [
-        const Color(0xFF1B1033),
-        const Color(0xFF0B0716),
-      ]);
+      _skyShader = ui.Gradient.linear(
+        rect.topCenter,
+        rect.bottomCenter,
+        _palette,
+      );
     }
     canvas.drawRect(rect, ui.Paint()..shader = _skyShader);
 
@@ -77,6 +92,8 @@ class BackgroundComponent extends PositionComponent {
         ..strokeWidth = 3,
     );
   }
+
+  List<Color> get _palette => _palettes[(_wave - 1) % _palettes.length];
 
   void _renderStars(ui.Canvas canvas) {
     for (final star in _stars) {

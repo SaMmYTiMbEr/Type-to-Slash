@@ -1,3 +1,6 @@
+import 'entities/enemy_kind.dart';
+import 'entities/run_stats.dart';
+
 sealed class GameEvent {
   const GameEvent();
 }
@@ -6,6 +9,7 @@ class EnemySlashed extends GameEvent {
   const EnemySlashed({
     required this.enemyId,
     required this.word,
+    required this.kind,
     required this.x,
     required this.y,
     required this.points,
@@ -13,6 +17,7 @@ class EnemySlashed extends GameEvent {
 
   final int enemyId;
   final String word;
+  final EnemyKind kind;
   final double x;
   final double y;
   final int points;
@@ -20,6 +25,15 @@ class EnemySlashed extends GameEvent {
 
 class EnemyEscaped extends GameEvent {
   const EnemyEscaped({required this.enemyId, required this.x, required this.y});
+
+  final int enemyId;
+  final double x;
+  final double y;
+}
+
+/// A golden enemy that timed out: no life lost, the opportunity is gone.
+class EnemyExpired extends GameEvent {
+  const EnemyExpired({required this.enemyId, required this.x, required this.y});
 
   final int enemyId;
   final double x;
@@ -46,8 +60,14 @@ class TypoRegistered extends GameEvent {
   final int strikesRemaining;
 }
 
-class GameOver extends GameEvent {
-  const GameOver(this.finalScore);
+class WaveStarted extends GameEvent {
+  const WaveStarted(this.wave);
 
-  final int finalScore;
+  final int wave;
+}
+
+class GameOver extends GameEvent {
+  const GameOver(this.stats);
+
+  final RunStats stats;
 }

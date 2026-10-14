@@ -4,12 +4,23 @@ import 'package:flutter/material.dart';
 import '../../domain/game_session.dart';
 import '../game/game_view_model.dart';
 import '../game/type_and_slash_game.dart';
+import '../stats/loadout_store.dart';
+import '../stats/stats_store.dart';
+import 'game_over_dialog.dart';
+import 'upgrade_draft_screen.dart';
 
 /// Hosts the Flame canvas and overlays the HUD and typing field.
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key, required this.createSession});
+  const GameScreen({
+    super.key,
+    required this.createSession,
+    required this.statsStore,
+    required this.loadoutStore,
+  });
 
   final GameSession Function() createSession;
+  final StatsStore statsStore;
+  final LoadoutStore loadoutStore;
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -27,9 +38,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _session = widget.createSession();
-    _viewModel = GameViewModel(_session);
+    _viewModel = GameViewModel(_session, statsStore: widget.statsStore);
     _game = TypeAndSlashGame(session: _session);
     _viewModel.isGameOver.addListener(_showGameOverDialog);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _focusNode.requestFocus(),
+    );
   }
 
   @override
@@ -48,7 +62,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:
-        if (!_viewModel.isGameOver.value) _game.resumeEngine();
+        if (_viewModel.isGameOver.value) return;
+        _game.resumeEngine();
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _focusNode.requestFocus(),
+        );
       case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
@@ -63,23 +81,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Game Over'),
-        content: Text('Your score: ${_viewModel.score.value}'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-              _restart();
-            },
-            child: const Text('Restart'),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.of(dialogContext).popUntil((route) => route.isFirst),
-            child: const Text('Main Menu'),
-          ),
-        ],
+      builder: (dialogContext) => GameOverDialog(
+        viewModel: _viewModel,
+        onDraftUpgrade: widget.loadoutStore.hasOptions
+            ? () {
+                Navigator.of(dialogContext).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        UpgradeDraftScreen(loadoutStore: widget.loadoutStore),
+                  ),
+                );
+              }
+            : null,
+        onRestart: () {
+          Navigator.of(dialogContext).pop();
+          _restart();
+        },
+        onMainMenu: () =>
+            Navigator.of(dialogContext).popUntil((route) => route.isFirst),
       ),
     );
   }
@@ -87,13 +107,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void _restart() {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (_) => GameScreen(createSession: widget.createSession),
+        builder: (_) => GameScreen(
+          createSession: widget.createSession,
+          statsStore: widget.statsStore,
+          loadoutStore: widget.loadoutStore,
+        ),
       ),
     );
   }
 
   void _onChanged(String value) {
-    if (_viewModel.submit(value)) _clearField();
+    final outcome = _viewModel.submit(value);
+    if (outcome == SlashOutcome.slashed || outcome == SlashOutcome.typo) {
+      _clearField();
+    }
   }
 
   void _onSubmitted(String value) {
@@ -193,6 +220,13 @@ class _Hud extends StatelessWidget {
                     ),
                   ),
                 ),
+              ),
+            ),
+            ValueListenableBuilder<int>(
+              valueListenable: viewModel.wave,
+              builder: (context, wave, _) => Text(
+                'Wave $wave',
+                style: const TextStyle(fontSize: 14, color: Colors.white54),
               ),
             ),
           ],

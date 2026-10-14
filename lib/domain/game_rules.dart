@@ -1,3 +1,8 @@
+import 'dart:math' as math;
+
+import 'entities/enemy_kind.dart';
+import 'entities/upgrade.dart';
+
 /// Tuning values for a play session. All gameplay numbers live here so the
 /// balance of the game can be changed in one place.
 class GameRules {
@@ -17,6 +22,8 @@ class GameRules {
     this.comboWindow = 3.0,
     this.maxStrikes = 4,
     this.comboTiers = const [3, 6, 10],
+    this.waveScoreStep = 100,
+    this.goldenLifetime = 4.0,
     this.defenseLineX = 8,
   });
 
@@ -35,7 +42,51 @@ class GameRules {
   final double comboWindow;
   final int maxStrikes;
   final List<int> comboTiers;
+  final int waveScoreStep;
+  final double goldenLifetime;
   final double defenseLineX;
+
+  /// Derives the effective rules for a run from the base rules and the
+  /// upgrades the player collected.
+  factory GameRules.forLoadout(
+    Loadout loadout, {
+    GameRules base = const GameRules(),
+  }) {
+    final risky = loadout.has(UpgradeId.doubleOrNothing);
+    final lives =
+        base.maxHealth +
+        (loadout.has(UpgradeId.thickSkin) ? 1 : 0) -
+        (risky ? 1 : 0);
+
+    return GameRules(
+      maxHealth: math.max(1, lives),
+      scorePerSlash: risky ? base.scorePerSlash * 2 : base.scorePerSlash,
+      baseSpeed: loadout.has(UpgradeId.keenEyes)
+          ? base.baseSpeed * 0.85
+          : base.baseSpeed,
+      speedPerPoint: base.speedPerPoint,
+      maxSpeed: base.maxSpeed,
+      laneSpacing: loadout.has(UpgradeId.wideLanes)
+          ? base.laneSpacing * 1.4
+          : base.laneSpacing,
+      topPadding: base.topPadding,
+      bottomPadding: base.bottomPadding,
+      baseSpawnInterval: base.baseSpawnInterval,
+      minSpawnInterval: base.minSpawnInterval,
+      spawnIntervalPerPoint: base.spawnIntervalPerPoint,
+      slashGraceInterval: base.slashGraceInterval,
+      comboWindow: loadout.has(UpgradeId.endlessCombo)
+          ? double.infinity
+          : base.comboWindow,
+      maxStrikes: loadout.has(UpgradeId.forgiving)
+          ? base.maxStrikes + 2
+          : base.maxStrikes,
+      comboTiers: base.comboTiers,
+      waveScoreStep: base.waveScoreStep,
+      goldenLifetime: base.goldenLifetime,
+      defenseLineX: base.defenseLineX,
+    );
+  }
 
   /// Score multiplier for the current streak length.
   int multiplierFor(int combo) {
@@ -46,15 +97,24 @@ class GameRules {
     return multiplier;
   }
 
-  double speedFor(int score) {
-    final speed = baseSpeed + score * speedPerPoint;
-    return speed > maxSpeed ? maxSpeed : speed;
-  }
+  int waveFor(int score) => 1 + score ~/ waveScoreStep;
 
   double spawnIntervalFor(int score) {
     final interval = baseSpawnInterval - score * spawnIntervalPerPoint;
     return interval < minSpawnInterval ? minSpawnInterval : interval;
   }
+
+  double speedFor(int score, EnemyKind kind) {
+    final ramped = baseSpeed + score * speedPerPoint;
+    final capped = ramped > maxSpeed ? maxSpeed : ramped;
+    return capped * kind.speedMultiplier;
+  }
+
+  int pointsFor(EnemyKind kind, int combo) =>
+      (scorePerSlash * kind.pointsMultiplier * multiplierFor(combo)).round();
+
+  double? lifetimeFor(EnemyKind kind) =>
+      kind.hasTimeLimit ? goldenLifetime : null;
 
   int laneCount(double arenaHeight) {
     final usable = arenaHeight - topPadding - bottomPadding;

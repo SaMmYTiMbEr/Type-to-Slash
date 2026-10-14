@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math';
 
 import 'entities/game_enemy.dart';
+import 'entities/run_stats.dart';
+import 'entities/upgrade.dart';
 import 'game_events.dart';
 import 'game_rules.dart';
 import 'repositories/word_source.dart';
@@ -16,30 +18,43 @@ class GameSession {
   GameSession({
     required this.words,
     GameArena arena = GameArena.empty,
-    this.rules = const GameRules(),
+    GameRules? baseRules,
+    this.loadout = const Loadout(),
     Random? random,
-  }) : _random = random ?? Random(),
-       _health = rules.maxHealth,
-       _spawnCooldown = rules.slashGraceInterval {
+  }) : _baseRules = baseRules ?? const GameRules(),
+       _random = random ?? Random(),
+       _wave = 1 {
+    rules = GameRules.forLoadout(loadout, base: _baseRules);
+    _health = rules.maxHealth;
+    _spawnCooldown = rules.slashGraceInterval;
     _arena = arena;
     _events = StreamController<GameEvent>.broadcast(sync: true);
   }
 
   final WordSource words;
-  final GameRules rules;
+  final Loadout loadout;
+  final GameRules _baseRules;
   final Random _random;
+
+  late final GameRules rules;
 
   final List<GameEnemy> _enemies = [];
 
   GameArena _arena = GameArena.empty;
   late final StreamController<GameEvent> _events;
   int _score = 0;
-  int _health;
+  late int _health;
   int _lastEnemyId = 0;
   int _combo = 0;
   int _strikes = 0;
+  int _wordsSlashed = 0;
+  int _typos = 0;
+  int _bestCombo = 0;
+  int _wave;
+  int? _targetEnemyId;
+  double _elapsed = 0;
   double _comboTimer = 0;
-  double _spawnCooldown;
+  late double _spawnCooldown;
   bool _isGameOver = false;
 
   Stream<GameEvent> get events => _events.stream;
@@ -56,6 +71,24 @@ class GameSession {
 
   int get strikesRemaining => rules.maxStrikes - _strikes;
 
+  int get wordsSlashed => _wordsSlashed;
+
+  int get typos => _typos;
+
+  int get bestCombo => _bestCombo;
+
+  int get wave => _wave;
+
+  Duration get elapsed => Duration(milliseconds: (_elapsed * 1000).round());
+
+  RunStats get runStats => RunStats(
+    score: _score,
+    wordsSlashed: _wordsSlashed,
+    typos: _typos,
+    bestCombo: _bestCombo,
+    duration: elapsed,
+  );
+
   bool get isGameOver => _isGameOver;
 
   GameArena get arena => _arena;
@@ -67,32 +100,62 @@ class GameSession {
   }
 
   /// Feeds the player's current input. A slash happens the instant the typed
-  /// text completes an enemy word, so no submit key is required.
+  /// text completes an enemy word, so no submit key is required. When several
+  /// enemies match, the most urgent one (closest to the defense line) is hit.
   SlashOutcome handleInput(String rawInput) {
-    if (_isGameOver) return SlashOutcome.ignored;
+    if (_isGameOver) {
+      _targetEnemyId = null;
+      return SlashOutcome.ignored;
+    }
 
     final input = rawInput.trim().toLowerCase();
-    if (input.isEmpty) return SlashOutcome.ignored;
+    if (input.isEmpty) {
+      _targetEnemyId = null;
+      return SlashOutcome.ignored;
+    }
 
-    GameEnemy? fullyTyped;
     var hasProgress = false;
     for (final enemy in _enemies) {
-      if (!enemy.type(input)) continue;
-      hasProgress = true;
-      if (enemy.isFullyTyped && fullyTyped == null) fullyTyped = enemy;
+      if (enemy.type(input)) hasProgress = true;
     }
 
-    if (fullyTyped != null) {
-      _slash(fullyTyped);
-      return SlashOutcome.slashed;
+    _targetEnemyId = _mostUrgent(input)?.id;
+
+    final completed = _mostUrgent(input, requireFullWord: true);
+    if (completed == null) {
+      return hasProgress ? SlashOutcome.typed : _registerTypo();
     }
 
-    if (hasProgress) return SlashOutcome.typed;
-    return _registerTypo();
+    _targetEnemyId = null;
+    _slash(completed);
+    return SlashOutcome.slashed;
+  }
+
+  /// The enemy the current input would slash: the most urgent one whose word
+  /// starts with [rawInput]. Used by the UI to show what you are aiming at.
+  int? targetFor(String rawInput) {
+    if (_isGameOver) return null;
+    final input = rawInput.trim().toLowerCase();
+    if (input.isEmpty) return null;
+    return _mostUrgent(input)?.id;
+  }
+
+  /// Id of the enemy currently highlighted as the target, if any.
+  int? get targetEnemyId => _targetEnemyId;
+
+  GameEnemy? _mostUrgent(String input, {bool requireFullWord = false}) {
+    GameEnemy? best;
+    for (final enemy in _enemies) {
+      if (!enemy.word.startsWith(input)) continue;
+      if (requireFullWord && enemy.word.length != input.length) continue;
+      if (best == null || enemy.x < best.x) best = enemy;
+    }
+    return best;
   }
 
   SlashOutcome _registerTypo() {
     _resetCombo();
+    _typos++;
     _strikes++;
     _publish(
       TypoRegistered(strikes: _strikes, strikesRemaining: strikesRemaining),
@@ -105,19 +168,23 @@ class GameSession {
   }
 
   void _slash(GameEnemy enemy) {
+    final points = rules.pointsFor(enemy.kind, _combo + 1);
     _remove(enemy);
     _combo++;
+    _bestCombo = _combo > _bestCombo ? _combo : _bestCombo;
+    _wordsSlashed++;
     _comboTimer = rules.comboWindow;
     _strikes = 0;
-    _score += rules.scorePerSlash * multiplier;
+    _score += points;
     _spawnCooldown = rules.slashGraceInterval;
     _publish(
       EnemySlashed(
         enemyId: enemy.id,
         word: enemy.word,
+        kind: enemy.kind,
         x: enemy.x,
         y: enemy.laneY,
-        points: rules.scorePerSlash * multiplier,
+        points: points,
       ),
     );
     _publish(ComboChanged(combo: _combo, multiplier: multiplier));
@@ -132,6 +199,7 @@ class GameSession {
 
   void update(double dt) {
     if (_isGameOver) return;
+    _elapsed += dt;
 
     if (_comboTimer > 0) {
       _comboTimer -= dt;
@@ -144,19 +212,39 @@ class GameSession {
       _spawnCooldown = rules.spawnIntervalFor(_score);
     }
 
-    final speed = rules.speedFor(_score);
+    final expired = <GameEnemy>[];
     final escaped = <GameEnemy>[];
     for (final enemy in _enemies) {
-      enemy.move(-speed * dt);
-      if (enemy.hasReached(rules.defenseLineX)) escaped.add(enemy);
+      enemy.advance(dt, rules.speedFor(_score, enemy.kind));
+      if (enemy.hasReached(rules.defenseLineX)) {
+        escaped.add(enemy);
+      } else if (enemy.isExpired) {
+        expired.add(enemy);
+      }
+    }
+
+    for (final enemy in expired) {
+      _remove(enemy);
+      if (_targetEnemyId == enemy.id) _targetEnemyId = null;
+      _publish(EnemyExpired(enemyId: enemy.id, x: enemy.x, y: enemy.laneY));
     }
 
     for (final enemy in escaped) {
       _remove(enemy);
+      if (_targetEnemyId == enemy.id) _targetEnemyId = null;
       _publish(EnemyEscaped(enemyId: enemy.id, x: enemy.x, y: enemy.laneY));
       _damage();
       if (_isGameOver) return;
     }
+
+    _updateWave();
+  }
+
+  void _updateWave() {
+    final wave = rules.waveFor(_score);
+    if (wave == _wave) return;
+    _wave = wave;
+    _publish(WaveStarted(wave));
   }
 
   void dispose() {
@@ -169,12 +257,15 @@ class GameSession {
     if (lanes == 0) return;
 
     final lane = _pickLane(lanes);
+    final spec = words.nextEnemy();
     final enemy = GameEnemy(
       id: ++_lastEnemyId,
-      word: words.nextWord(),
+      word: spec.word,
+      kind: spec.kind,
       lane: lane,
       laneY: rules.laneY(lane, _arena.height),
       x: _arena.width,
+      lifetime: rules.lifetimeFor(spec.kind),
     );
     _enemies.add(enemy);
   }
@@ -207,7 +298,7 @@ class GameSession {
 
     _health = 0;
     _isGameOver = true;
-    _publish(GameOver(_score));
+    _publish(GameOver(runStats));
   }
 
   void _publish(GameEvent event) => _events.add(event);

@@ -1,10 +1,17 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:type_to_slash/main.dart';
-import 'package:type_to_slash/presentation/screens/game_screen.dart';
+
+import 'support/test_harness.dart';
 
 void main() {
   testWidgets('app boots into the menu and starts a game', (tester) async {
-    await tester.pumpWidget(const TypeAndSlashApp());
+    final harness = TestHarness();
+    await tester.pumpWidget(
+      TypeAndSlashApp(
+        statsStore: harness.statsStore,
+        loadoutStore: harness.loadoutStore,
+      ),
+    );
 
     expect(find.text('TYPE & SLASH'), findsOneWidget);
 
@@ -12,7 +19,9 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.byType(GameScreen), findsOneWidget);
+    expect(find.textContaining('Score:'), findsOneWidget);
     expect(tester.takeException(), isNull);
+
+    harness.dispose();
   });
 }
